@@ -1,7 +1,7 @@
 // This project aims to show the combination of the three traditional primary colours
 // in a colourful light way.
 // There will be four sides of a cube been used,including yellow, blue, red and white sides.
-// V1.3 to test for the new blue side.
+// V2.1 to test for the white side and brightness control.
 
 #include <SPI.h>
 #include <WiFiNINA.h>
@@ -28,10 +28,11 @@ String lightId = "31";
 String mqtt_topic = "student/CASA0014/luminaire/" + lightId;
 String clientId = ""; 
 
-// Define the red, yellow and blue pins
+// Define the four pins
 const int PIN_R = A2;  
 const int PIN_Y = A3;
 const int PIN_B = A4;
+const int PIN_W = 6;
 
 // NeoPixel Configuration - we need to know this to know how to send messages 
 // to vespera 
@@ -52,6 +53,7 @@ void LedOrange();
 void LedBlue();
 void LedGreen();
 void LedPurple();
+void LedWhite();
 void LedOff();
 
 void send_all_off();
@@ -61,35 +63,80 @@ void send_all_orange();
 void send_all_blue();
 void send_all_green();
 void send_all_purple();
+void send_all_white();
 
-// Rainbow Effect
+// Rainbow Effect -- Red, orange, yellow, green, blue, purple
 const uint8_t COLS[6][3] = {
-  {255,   0,   0}, 
-  {255, 128,   0}, 
-  {255, 255,   0}, 
-  {  0, 255,   0}, 
-  {  0,   0, 255}, 
-  {255,   0, 255}  
+  {255,   0,   0},
+  {255, 128,   0},
+  {255, 255,   0},
+  {  0, 255,   0},
+  {  0,   0, 255},
+  {255,   0, 255}
 };
 const int BLOCKS = 6;
-const int BLOCK_SIZE = 12;         
+const int BLOCK_SIZE = 12;
 unsigned long lastAnim = 0;
 const unsigned long ANIM_INTERVAL_MS = 140;
 int animOffset = 0;
 
-inline void send_blocks_frame(int offset){
+// Brightness control
+uint8_t brightness = 180;
+const uint8_t BRIGHT_MIN = 40;
+const uint8_t BRIGHT_MAX = 255;
+const uint8_t BRIGHT_STEP = 12;
+int8_t brightDir = +1;
+unsigned long lastBrightStep = 0;
+const unsigned long BRIGHT_INTERVAL_MS = 140;
+
+// Touch sensors were out of control, may cuased by noise or false triggering. 
+// So the number of reads has increased, and the number of TRUE returns received has been improved to prevent the mess.
+bool readTouchStable(int pin) {
+  const uint8_t SAMPLES = 7;
+  const uint8_t NEED    = 5;
+  uint8_t hi = 0;
+  for (uint8_t i=0;i<SAMPLES;i++){
+    if (digitalRead(pin) == HIGH) hi++;
+    delayMicroseconds(2000);
+  }
+  return (hi >= NEED);
+}
+
+
+inline uint8_t scale(uint8_t v){ return (uint16_t)v * brightness / 255; }
+
+inline void publish_payload(){
+  if (mqttClient.connected()){
+    mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
+  }
+}
+
+inline void fill_all_scaled(uint8_t r, uint8_t g, uint8_t b){
+  uint8_t R = scale(r), G = scale(g), B = scale(b);
+  for (int i=0; i<num_leds; i++){
+    RGBpayload[i*3+0] = R;
+    RGBpayload[i*3+1] = G;
+    RGBpayload[i*3+2] = B;
+  }
+  publish_payload();
+}
+
+inline void send_blocks_frame_scaled(int offset){
   if (!mqttClient.connected()) return;
   for(int b=0; b<BLOCKS; b++){
     const uint8_t* c = COLS[(b + offset) % BLOCKS];
+    uint8_t R = scale(c[0]);
+    uint8_t G = scale(c[1]);
+    uint8_t B = scale(c[2]);
     int start = b * BLOCK_SIZE;
     int end   = start + BLOCK_SIZE;
     for(int i=start; i<end; i++){
-      RGBpayload[i*3 + 0] = c[0];
-      RGBpayload[i*3 + 1] = c[1];
-      RGBpayload[i*3 + 2] = c[2];
+      RGBpayload[i*3 + 0] = R;
+      RGBpayload[i*3 + 1] = G;
+      RGBpayload[i*3 + 2] = B;
     }
   }
-  mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
+  publish_payload();
 }
 
 void printMacAddress(byte mac[]) {
@@ -104,7 +151,8 @@ void printMacAddress(byte mac[]) {
 void setup() {
   Serial.begin(115200);
   delay(60);
-  Serial.println("Touch Sensor Luminaire Controller (R/Y/B + mixes)");
+  Serial.println("Touch Sensor Luminaire Controller (R/Y/B/W + robust filtering)");
+
 
   byte mac[6];
   WiFi.macAddress(mac);
@@ -115,9 +163,11 @@ void setup() {
   Serial.print("This device is Luminaire ");
   Serial.println(lightId);
 
+
   pinMode(PIN_R, INPUT);
   pinMode(PIN_Y, INPUT);
   pinMode(PIN_B, INPUT);
+  pinMode(PIN_W, INPUT);
 
   // WiFi + MQTT
   startWifi();
@@ -126,201 +176,100 @@ void setup() {
   mqttClient.setCallback(callback);
   reconnectMQTT();
 
-
-  send_all_off();
-  LedOff();
-
-  Serial.println("Set-up complete - Touch A2=RED, A3=YELLOW, A4=BLUE");
+  send_all_off(); LedOff();
+  Serial.println("Set-up complete - A2=RED, A3=YELLOW, A4=BLUE, D6=WHITE");
 }
 
 void loop() {
-  // Reconnect if necessary
-  if (!mqttClient.connected()) {
-    reconnectMQTT();
-  }
-  if (WiFi.status() != WL_CONNECTED){
-    startWifi();
-  }
+  if (!mqttClient.connected()) reconnectMQTT();
+  if (WiFi.status() != WL_CONNECTED) startWifi();
   mqttClient.loop();
 
-  static unsigned long tDeb = 0;
-  if (millis() - tDeb < 50) {
-    // The rainbow effect
-    bool rHeld = (digitalRead(PIN_R) == HIGH);
-    bool yHeld = (digitalRead(PIN_Y) == HIGH);
-    bool bHeld = (digitalRead(PIN_B) == HIGH);
-    if (rHeld && yHeld && bHeld) {
-      if (millis() - lastAnim >= ANIM_INTERVAL_MS) {
-        lastAnim = millis();
-        send_blocks_frame(animOffset);
-        animOffset = (animOffset + 1) % BLOCKS;
-      }
+  bool rNow = readTouchStable(PIN_R);
+  bool yNow = readTouchStable(PIN_Y);
+  bool bNow = readTouchStable(PIN_B);
+  bool wNow = readTouchStable(PIN_W);
+
+  static bool rPrev=false, yPrev=false, bPrev=false, wPrev=false;
+
+  if (rNow != rPrev || yNow != yPrev || bNow != bPrev || wNow != wPrev) {
+    rPrev=rNow; yPrev=yNow; bPrev=bNow; wPrev=wNow;
+
+    if (wNow && !(rNow || yNow || bNow)) {
+      Serial.println("WHITE only");
+      LedWhite(); send_all_white();
     }
-    return;
-  }
-  tDeb = millis();
-
-  bool rNow = (digitalRead(PIN_R) == HIGH);
-  bool yNow = (digitalRead(PIN_Y) == HIGH);
-  bool bNow = (digitalRead(PIN_B) == HIGH);
-
-  static bool rPrev = false;
-  static bool yPrev = false;
-  static bool bPrev = false;
-
-  if (rNow != rPrev || yNow != yPrev || bNow != bPrev) {
-    rPrev = rNow;
-    yPrev = yNow;
-    bPrev = bNow;
-
-    if (rNow && yNow && bNow) {
-      Serial.println("R+Y+B touched - COLOURFUL EFFECT (blocks)");
-      animOffset = 0;
-      lastAnim = 0;
-      send_blocks_frame(animOffset);
+    else if (rNow && yNow && bNow) {
+      Serial.println("R+Y+B - COLOURFUL EFFECT (blocks)");
+      animOffset = 0; lastAnim = 0;
+      send_blocks_frame_scaled(animOffset);
       animOffset = (animOffset + 1) % BLOCKS;
-      LedPurple();
     } 
     else if (rNow && yNow && !bNow) {
       Serial.println("R+Y - ORANGE");
-      send_all_orange();
-      LedOrange();
+      LedOrange(); send_all_orange();
     } 
     else if (rNow && !yNow && bNow) {
       Serial.println("R+B - PURPLE");
-      send_all_purple();
-      LedPurple();
+      LedPurple(); send_all_purple();
     } 
     else if (!rNow && yNow && bNow) {
       Serial.println("Y+B - GREEN");
-      send_all_green();
-      LedGreen();
+      LedGreen(); send_all_green();
     } 
     else if (rNow && !yNow && !bNow) {
       Serial.println("RED only");
-      send_all_red();
-      LedRed();
+      LedRed(); send_all_red();
     } 
     else if (!rNow && yNow && !bNow) {
       Serial.println("YELLOW only");
-      send_all_yellow();
-      LedYellow();
+      LedYellow(); send_all_yellow();
     } 
     else if (!rNow && !yNow && bNow) {
       Serial.println("BLUE only");
-      send_all_blue();
-      LedBlue();
+      LedBlue(); send_all_blue();
     } 
     else {
       Serial.println("No touch - OFF");
-      send_all_off();
-      LedOff();
+      LedOff(); send_all_off();
     }
   }
 
-  if (rNow && yNow && bNow) {
+  // The rainbow effect
+  if (rPrev && yPrev && bPrev) {
     if (millis() - lastAnim >= ANIM_INTERVAL_MS) {
       lastAnim = millis();
-      send_blocks_frame(animOffset);
+      send_blocks_frame_scaled(animOffset);
       animOffset = (animOffset + 1) % BLOCKS;
     }
   }
-}
 
-void send_all_off() {
-  if (mqttClient.connected()) {
-    for (int pixel = 0; pixel < num_leds; pixel++) {
-      RGBpayload[pixel * 3 + 0] = (byte)0;
-      RGBpayload[pixel * 3 + 1] = (byte)0;
-      RGBpayload[pixel * 3 + 2] = (byte)0;
+  // Touch the white side with other colours will change the brightness
+  if (wPrev && (rPrev || yPrev || bPrev)) {
+    if (millis() - lastBrightStep >= BRIGHT_INTERVAL_MS) {
+      lastBrightStep = millis();
+      int16_t next = (int16_t)brightness + brightDir * BRIGHT_STEP;
+      if (next >= BRIGHT_MAX) { next = BRIGHT_MAX; brightDir = -1; Serial.println("Brightness: MAX"); }
+      else if (next <= BRIGHT_MIN) { next = BRIGHT_MIN; brightDir = +1; Serial.println("Brightness: MIN"); }
+      brightness = (uint8_t)next;
+
+      if (rPrev && yPrev && bPrev)      send_blocks_frame_scaled(animOffset);
+      else if (rPrev && yPrev)          send_all_orange();
+      else if (rPrev && bPrev)          send_all_purple();
+      else if (yPrev && bPrev)          send_all_green();
+      else if (rPrev)                   send_all_red();
+      else if (yPrev)                   send_all_yellow();
+      else if (bPrev)                   send_all_blue();
+      else                              send_all_white();
     }
-    mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
-    Serial.println("Published all OFF.");
-  } else {
-    Serial.println("MQTT mqttClient not connected, cannot publish from *send_all_off*.");
   }
 }
 
-void send_all_red() {
-  if (mqttClient.connected()) {
-    for (int pixel = 0; pixel < num_leds; pixel++) {
-      RGBpayload[pixel * 3 + 0] = (byte)255;
-      RGBpayload[pixel * 3 + 1] = (byte)0;
-      RGBpayload[pixel * 3 + 2] = (byte)0;
-    }
-    mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
-    Serial.println("Published RED to all pixels.");
-  } else {
-    Serial.println("MQTT mqttClient not connected, cannot publish from *send_all_red*.");
-  }
-}
-
-void send_all_yellow() {
-  if (mqttClient.connected()) {
-    for (int pixel = 0; pixel < num_leds; pixel++) {
-      RGBpayload[pixel * 3 + 0] = (byte)255;
-      RGBpayload[pixel * 3 + 1] = (byte)255;
-      RGBpayload[pixel * 3 + 2] = (byte)0;
-    }
-    mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
-    Serial.println("Published YELLOW to all pixels.");
-  } else {
-    Serial.println("MQTT mqttClient not connected, cannot publish from *send_all_yellow*.");
-  }
-}
-
-void send_all_orange() {
-  if (mqttClient.connected()) {
-    for (int pixel = 0; pixel < num_leds; pixel++) {
-      RGBpayload[pixel * 3 + 0] = (byte)255; 
-      RGBpayload[pixel * 3 + 1] = (byte)128; 
-      RGBpayload[pixel * 3 + 2] = (byte)0;  
-    }
-    mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
-    Serial.println("Published ORANGE to all pixels.");
-  } else {
-    Serial.println("MQTT mqttClient not connected, cannot publish from *send_all_orange*.");
-  }
-}
-
-void send_all_blue() {
-  if (mqttClient.connected()) {
-    for (int pixel = 0; pixel < num_leds; pixel++) {
-      RGBpayload[pixel * 3 + 0] = (byte)0;
-      RGBpayload[pixel * 3 + 1] = (byte)0;
-      RGBpayload[pixel * 3 + 2] = (byte)255;
-    }
-    mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
-    Serial.println("Published BLUE to all pixels.");
-  } else {
-    Serial.println("MQTT mqttClient not connected, cannot publish from *send_all_blue*.");
-  }
-}
-
-void send_all_green() {
-  if (mqttClient.connected()) {
-    for (int pixel = 0; pixel < num_leds; pixel++) {
-      RGBpayload[pixel * 3 + 0] = (byte)0;
-      RGBpayload[pixel * 3 + 1] = (byte)255;
-      RGBpayload[pixel * 3 + 2] = (byte)0; 
-    }
-    mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
-    Serial.println("Published GREEN to all pixels.");
-  } else {
-    Serial.println("MQTT mqttClient not connected, cannot publish from *send_all_green*.");
-  }
-}
-
-void send_all_purple() {
-  if (mqttClient.connected()) {
-    for (int pixel = 0; pixel < num_leds; pixel++) {
-      RGBpayload[pixel * 3 + 0] = (byte)255;
-      RGBpayload[pixel * 3 + 1] = (byte)0;
-      RGBpayload[pixel * 3 + 2] = (byte)255;
-    }
-    mqttClient.publish(mqtt_topic.c_str(), RGBpayload, payload_size);
-    Serial.println("Published PURPLE to all pixels.");
-  } else {
-    Serial.println("MQTT mqttClient not connected, cannot publish from *send_all_purple*.");
-  }
-}
+void send_all_off()      { fill_all_scaled(0,   0,   0  ); Serial.println("Published OFF."); }
+void send_all_red()      { fill_all_scaled(255, 0,   0  ); Serial.println("Published RED."); }
+void send_all_yellow()   { fill_all_scaled(255, 255, 0  ); Serial.println("Published YELLOW."); }
+void send_all_orange()   { fill_all_scaled(255, 128, 0  ); Serial.println("Published ORANGE."); }
+void send_all_blue()     { fill_all_scaled(0,   0,   255); Serial.println("Published BLUE."); }
+void send_all_green()    { fill_all_scaled(0,   255, 0  ); Serial.println("Published GREEN."); }
+void send_all_purple()   { fill_all_scaled(255, 0,   255); Serial.println("Published PURPLE."); }
+void send_all_white()    { fill_all_scaled(255, 255, 255); Serial.println("Published WHITE."); }

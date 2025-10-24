@@ -37,6 +37,12 @@ void LedPurple(){
   WiFiDrv::analogWrite(27, 155); 
 }
 
+void LedWhite(){
+  WiFiDrv::analogWrite(25, 155);
+  WiFiDrv::analogWrite(26, 155);
+  WiFiDrv::analogWrite(27, 155); 
+}
+
 void LedOff(){
   WiFiDrv::analogWrite(25, 0);
   WiFiDrv::analogWrite(26, 0);
