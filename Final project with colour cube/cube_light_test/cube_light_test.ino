@@ -1,13 +1,14 @@
 // This project aims to show the combination of the three traditional primary colours
 // in a colourful light way.
 // There will be four sides of a cube been used,including yellow, blue, red and white sides.
-// V2.1 to test for the white side and brightness control.
+// V3.1 with lights control changes from long-press to short-press. 
+// Each sensor now has two status: 0 for off and 1 for on.
 
 #include <SPI.h>
 #include <WiFiNINA.h>
 #include <PubSubClient.h>
 #include "arduino_secrets.h"
-#include <utility/wifi_drv.h>  
+#include <utility/wifi_drv.h>
 
 // Passwords
 const char* ssid          = SECRET_SSID;
@@ -82,26 +83,15 @@ int animOffset = 0;
 
 // Brightness control
 uint8_t brightness = 180;
-const uint8_t BRIGHT_MIN = 40;
+const uint8_t BRIGHT_MIN = 30;
 const uint8_t BRIGHT_MAX = 255;
-const uint8_t BRIGHT_STEP = 12;
+const uint8_t BRIGHT_STEP = 6;
 int8_t brightDir = +1;
 unsigned long lastBrightStep = 0;
-const unsigned long BRIGHT_INTERVAL_MS = 140;
+const unsigned long BRIGHT_INTERVAL_MS = 150;
 
-// Touch sensors were out of control, may cuased by noise or false triggering. 
-// So the number of reads has increased, and the number of TRUE returns received has been improved to prevent the mess.
-bool readTouchStable(int pin) {
-  const uint8_t SAMPLES = 7;
-  const uint8_t NEED    = 5;
-  uint8_t hi = 0;
-  for (uint8_t i=0;i<SAMPLES;i++){
-    if (digitalRead(pin) == HIGH) hi++;
-    delayMicroseconds(2000);
-  }
-  return (hi >= NEED);
-}
-
+uint8_t latched = 0;
+bool whiteOn = false;
 
 inline uint8_t scale(uint8_t v){ return (uint16_t)v * brightness / 255; }
 
@@ -112,28 +102,21 @@ inline void publish_payload(){
 }
 
 inline void fill_all_scaled(uint8_t r, uint8_t g, uint8_t b){
-  uint8_t R = scale(r), G = scale(g), B = scale(b);
-  for (int i=0; i<num_leds; i++){
-    RGBpayload[i*3+0] = R;
-    RGBpayload[i*3+1] = G;
-    RGBpayload[i*3+2] = B;
+  const uint8_t R = scale(r), G = scale(g), B = scale(b);
+  for (int i=0;i<num_leds;i++){
+    RGBpayload[i*3+0]=R; RGBpayload[i*3+1]=G; RGBpayload[i*3+2]=B;
   }
   publish_payload();
 }
 
 inline void send_blocks_frame_scaled(int offset){
   if (!mqttClient.connected()) return;
-  for(int b=0; b<BLOCKS; b++){
+  for (int b=0;b<BLOCKS;b++){
     const uint8_t* c = COLS[(b + offset) % BLOCKS];
-    uint8_t R = scale(c[0]);
-    uint8_t G = scale(c[1]);
-    uint8_t B = scale(c[2]);
-    int start = b * BLOCK_SIZE;
-    int end   = start + BLOCK_SIZE;
-    for(int i=start; i<end; i++){
-      RGBpayload[i*3 + 0] = R;
-      RGBpayload[i*3 + 1] = G;
-      RGBpayload[i*3 + 2] = B;
+    const uint8_t R=scale(c[0]), G=scale(c[1]), B=scale(c[2]);
+    const int start=b*BLOCK_SIZE, end=start+BLOCK_SIZE;
+    for (int i=start;i<end;i++){
+      RGBpayload[i*3+0]=R; RGBpayload[i*3+1]=G; RGBpayload[i*3+2]=B;
     }
   }
   publish_payload();
@@ -148,28 +131,55 @@ void printMacAddress(byte mac[]) {
   Serial.println();
 }
 
+void applyOutput(bool forceSend=false){
+  // White light only appears when no colours are latched
+  if (whiteOn && (latched==0)){
+    LedWhite(); send_all_white(); return;
+  }
+  if (latched==0){
+    LedOff(); send_all_off(); return;
+  }
+
+  if ((latched & 0x7)==0b111 && !whiteOn){
+    if (forceSend){ animOffset=0; lastAnim=0; }
+    if (millis()-lastAnim >= ANIM_INTERVAL_MS){
+      lastAnim = millis();
+      send_blocks_frame_scaled(animOffset);
+      animOffset = (animOffset + 1) % BLOCKS;
+    }
+    return;
+  }
+
+  switch (latched & 0x7){
+    case 0b001: LedRed();    send_all_red();    break;
+    case 0b010: LedYellow(); send_all_yellow(); break;
+    case 0b100: LedBlue();   send_all_blue();   break;
+    case 0b011: LedOrange(); send_all_orange(); break;
+    case 0b101: LedPurple(); send_all_purple(); break;
+    case 0b110: LedGreen();  send_all_green();  break;
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(60);
-  Serial.println("Touch Sensor Luminaire Controller (R/Y/B/W + robust filtering)");
+  Serial.println("Touch Sensor Luminaire Controller (latched taps + white toggle + slow brightness)");
 
-
-  byte mac[6];
-  WiFi.macAddress(mac);
-  Serial.print("MAC address: ");
-  printMacAddress(mac);
-  clientId = "MKR1010-" + String(mac[5], HEX) + String(mac[4], HEX);
+  // MAC to clientId
+  byte mac[6]; WiFi.macAddress(mac);
+  Serial.print("MAC address: "); printMacAddress(mac);
+  clientId = "MKR1010-" + String(mac[5],HEX) + String(mac[4],HEX);
 
   Serial.print("This device is Luminaire ");
   Serial.println(lightId);
 
-
+  // Inputs
   pinMode(PIN_R, INPUT);
   pinMode(PIN_Y, INPUT);
   pinMode(PIN_B, INPUT);
   pinMode(PIN_W, INPUT);
 
-  // WiFi + MQTT
+  // Network/MQTT
   startWifi();
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setBufferSize(2200);
@@ -177,91 +187,82 @@ void setup() {
   reconnectMQTT();
 
   send_all_off(); LedOff();
-  Serial.println("Set-up complete - A2=RED, A3=YELLOW, A4=BLUE, D6=WHITE");
+  Serial.println("Ready: A2=R, A3=Y, A4=B (tap to toggle); D6=White (tap on/off, hold brightness).");
 }
 
 void loop() {
   if (!mqttClient.connected()) reconnectMQTT();
-  if (WiFi.status() != WL_CONNECTED) startWifi();
+  if (WiFi.status()!=WL_CONNECTED) startWifi();
   mqttClient.loop();
 
-  bool rNow = readTouchStable(PIN_R);
-  bool yNow = readTouchStable(PIN_Y);
-  bool bNow = readTouchStable(PIN_B);
-  bool wNow = readTouchStable(PIN_W);
+  static unsigned long tDeb=0;
+  if (millis()-tDeb < 30) {
+    if ((latched & 0x7)==0b111 && !whiteOn) applyOutput(false);
+    return;
+  }
+  tDeb = millis();
+
+  bool rNow = (digitalRead(PIN_R)==HIGH);
+  bool yNow = (digitalRead(PIN_Y)==HIGH);
+  bool bNow = (digitalRead(PIN_B)==HIGH);
+  bool wNow = (digitalRead(PIN_W)==HIGH);
 
   static bool rPrev=false, yPrev=false, bPrev=false, wPrev=false;
+  static unsigned long wDown=0;
+  static bool inLongBrightness=false;
 
-  if (rNow != rPrev || yNow != yPrev || bNow != bPrev || wNow != wPrev) {
-    rPrev=rNow; yPrev=yNow; bPrev=bNow; wPrev=wNow;
+  if (rNow && !rPrev) { latched ^= 0b001; Serial.print("R toggled -> "); Serial.println((latched&1)?"ON":"OFF"); applyOutput(true); }
+  if (yNow && !yPrev) { latched ^= 0b010; Serial.print("Y toggled -> "); Serial.println((latched&2)?"ON":"OFF"); applyOutput(true); }
+  if (bNow && !bPrev) { latched ^= 0b100; Serial.print("B toggled -> "); Serial.println((latched&4)?"ON":"OFF"); applyOutput(true); }
 
-    if (wNow && !(rNow || yNow || bNow)) {
-      Serial.println("WHITE only");
-      LedWhite(); send_all_white();
-    }
-    else if (rNow && yNow && bNow) {
-      Serial.println("R+Y+B - COLOURFUL EFFECT (blocks)");
-      animOffset = 0; lastAnim = 0;
-      send_blocks_frame_scaled(animOffset);
-      animOffset = (animOffset + 1) % BLOCKS;
-    } 
-    else if (rNow && yNow && !bNow) {
-      Serial.println("R+Y - ORANGE");
-      LedOrange(); send_all_orange();
-    } 
-    else if (rNow && !yNow && bNow) {
-      Serial.println("R+B - PURPLE");
-      LedPurple(); send_all_purple();
-    } 
-    else if (!rNow && yNow && bNow) {
-      Serial.println("Y+B - GREEN");
-      LedGreen(); send_all_green();
-    } 
-    else if (rNow && !yNow && !bNow) {
-      Serial.println("RED only");
-      LedRed(); send_all_red();
-    } 
-    else if (!rNow && yNow && !bNow) {
-      Serial.println("YELLOW only");
-      LedYellow(); send_all_yellow();
-    } 
-    else if (!rNow && !yNow && bNow) {
-      Serial.println("BLUE only");
-      LedBlue(); send_all_blue();
-    } 
-    else {
-      Serial.println("No touch - OFF");
-      LedOff(); send_all_off();
+  // Define the functions on the white side:
+  // Short press = white light, long press = brightness 
+  if (wNow && !wPrev) { wDown = millis(); inLongBrightness=false; }
+  if (wNow && !inLongBrightness && (millis()-wDown >= 600)) {
+    inLongBrightness = true;
+    Serial.println("White long-press: brightness control active");
+  }
+  if (!wNow && wPrev) {
+    if (!inLongBrightness) {
+      whiteOn = !whiteOn;
+      Serial.print("White toggle -> "); Serial.println(whiteOn?"ON (white)":"OFF");
+      applyOutput(true);
+    } else {
+      inLongBrightness = false;
+      Serial.println("White long-press ended");
     }
   }
 
-  // The rainbow effect
-  if (rPrev && yPrev && bPrev) {
-    if (millis() - lastAnim >= ANIM_INTERVAL_MS) {
-      lastAnim = millis();
-      send_blocks_frame_scaled(animOffset);
-      animOffset = (animOffset + 1) % BLOCKS;
-    }
-  }
+  rPrev=rNow; yPrev=yNow; bPrev=bNow; wPrev=wNow;
 
-  // Touch the white side with other colours will change the brightness
-  if (wPrev && (rPrev || yPrev || bPrev)) {
-    if (millis() - lastBrightStep >= BRIGHT_INTERVAL_MS) {
+  // Keep the rainbow effect if R+Y+B unless white on.
+  if ((latched & 0x7)==0b111 && !whiteOn) applyOutput(false);
+
+  // Brightness slowly changes when long-press the white side.
+  if (inLongBrightness){
+    const bool anyColour = (latched & 0x7) != 0;
+    if (millis()-lastBrightStep >= BRIGHT_INTERVAL_MS){
       lastBrightStep = millis();
       int16_t next = (int16_t)brightness + brightDir * BRIGHT_STEP;
-      if (next >= BRIGHT_MAX) { next = BRIGHT_MAX; brightDir = -1; Serial.println("Brightness: MAX"); }
-      else if (next <= BRIGHT_MIN) { next = BRIGHT_MIN; brightDir = +1; Serial.println("Brightness: MIN"); }
+      if (next >= BRIGHT_MAX){ next=BRIGHT_MAX; brightDir=-1; Serial.println("Brightness: MAX"); }
+      else if (next <= BRIGHT_MIN){ next=BRIGHT_MIN; brightDir=+1; Serial.println("Brightness: MIN"); }
       brightness = (uint8_t)next;
 
-      if (rPrev && yPrev && bPrev)      send_blocks_frame_scaled(animOffset);
-      else if (rPrev && yPrev)          send_all_orange();
-      else if (rPrev && bPrev)          send_all_purple();
-      else if (yPrev && bPrev)          send_all_green();
-      else if (rPrev)                   send_all_red();
-      else if (yPrev)                   send_all_yellow();
-      else if (bPrev)                   send_all_blue();
-      else                              send_all_white();
+      if (whiteOn && !anyColour) {
+        send_all_white();
+      } else {
+        if      ((latched & 0x7)==0b111) send_blocks_frame_scaled(animOffset);
+        else if ((latched & 0x7)==0b011) send_all_orange();
+        else if ((latched & 0x7)==0b101) send_all_purple();
+        else if ((latched & 0x7)==0b110) send_all_green();
+        else if ((latched & 0x7)==0b001) send_all_red();
+        else if ((latched & 0x7)==0b010) send_all_yellow();
+        else if ((latched & 0x7)==0b100) send_all_blue();
+        else                             send_all_off();
+      }
     }
+  } else {
+    applyOutput(false);
   }
 }
 
