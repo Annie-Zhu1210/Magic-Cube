@@ -9,5 +9,4 @@ The effect of the lights can be seen on the Vespera.
 -------------------------------------------------------------------
 **A sketch of the prototype idea.**
 
-![This is a picture of the initial prototype idea of the magic cube.]
-([https://images/idea_sketch.JPG](https://github.com/Annie-Zhu1210/Magic-Cube/blob/main/images/idea_sketch.JPG))
+![This is a picture of the initial prototype idea of the magic cube.](/images/idea_sketch.JPG))
