@@ -7,6 +7,15 @@ Imagine a cube with six sides, apart from the top and bottom sides, all four oth
 The effect of the lights can be seen on the Vespera.
 
 -------------------------------------------------------------------
-**A sketch of the prototype idea.**
+## **The Magic Cube and its effect**
 
-![This is a picture of the initial prototype idea of the magic cube.](/images/idea_sketch.JPG))
+
+![This shows what the cube looks like](/images/CompletedCube/CompletedCube_1.JPG)
+
+![This shows what the rainbow effect on the light looks like, by controlling the sensors on the cube](/images/LightEffect.JPG)
+
+
+
+## **A sketch of the prototype idea.**
+
+![This is a picture of the initial prototype idea of the magic cube.](/images/Sketch_of_Initial_Idea.JPG)
