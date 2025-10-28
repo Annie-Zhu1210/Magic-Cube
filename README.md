@@ -1,21 +1,38 @@
 # Magic-Cube
 
-This is a personal project for CASA0014
+*A personal interactive light project for CASA0014*
 
-Imagine a cube with six sides, apart from the top and bottom sides, all four other sides can create different colours in the light. Based on the three primary colours, simply touch different sides, and see what light colour your combination can make.
+The Magic Cube is an interactive light installation that responds to touch.
+Imagine a cube with six sides — excluding the top and bottom, the four side faces each represent a primary colour (red, yellow, blue, and white). By touching or combining different sides, you can mix colours in real time and create your own light spectrum.
 
-The effect of the lights can be seen on the Vespera.
+This project explores the relationship between human interaction and ambient light, combining hardware design, sensor control, and creative coding. The lighting effects can be visualised through Vespera.
 
--------------------------------------------------------------------
-## **The Magic Cube and its effect**
+## **How it works** ##
 
+Four sides of the cube are connected to a touch sensor that triggers LED colour changes.
+
+The cube uses an MKR WiFi 1010 microcontroller (or similar board) to process input from touch sensors and control an RGB LED strip.
+
+The logic is implemented in Arduino IDE, and messages are sent through MQTT to the Vespera visualisation platform.
+
+
+## **Hardware Components** ##
+
+- Touch sensors*4
+- A microcontroller with WiFi connection (MKR WiFi 1010, etc.)
+- A 1000 µF - 2000 µF capacitor
+- Power supply
+  
+## **Images**
+
+### **Final Cube Desgin** ###
 
 ![This shows what the cube looks like](/images/CompletedCube/CompletedCube_1.JPG)
 
+### **Light Effects** ###
+
 ![This shows what the rainbow effect on the light looks like, by controlling the sensors on the cube](/images/LightEffect.JPG)
 
-
-
-## **A sketch of the prototype idea.**
+### **A sketch of the prototype idea.** ###
 
 ![This is a picture of the initial prototype idea of the magic cube.](/images/Sketch_of_Initial_Idea.JPG)
