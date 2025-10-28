@@ -31,7 +31,7 @@ The logic is implemented in Arduino IDE, and messages are sent through MQTT to t
 
 ### **Light Effects** ###
 
-![This shows what the rainbow effect on the light looks like, by controlling the sensors on the cube](/images/LightEffect.JPG)
+![This shows what the rainbow effect on the light looks like, by controlling the sensors on the cube](/images/LightEffect.jpg)
 
 ### **A sketch of the prototype idea.** ###
 
